@@ -1,13 +1,23 @@
 "use client";
 
-import type { Session, User } from "@supabase/supabase-js";
 import { createContext, useContext, useEffect, useMemo, useState } from "react";
 import type React from "react";
-import { createClient } from "@/lib/supabase/browser";
+
+/**
+ * Session context after retiring Supabase Auth. Fetches the current user from
+ * `/api/auth/me` (signed cookie session). No realtime auth events — session changes
+ * take effect on navigation after login/logout.
+ */
+type SessionUser = {
+  id: string;
+  email: string | null;
+  user_metadata?: Record<string, unknown>;
+};
+type SessionLike = { user: SessionUser } | null;
 
 type SessionContextValue = {
-  session: Session | null;
-  user: User | null;
+  session: SessionLike;
+  user: SessionUser | null;
   loading: boolean;
 };
 
@@ -18,29 +28,29 @@ const SessionContext = createContext<SessionContextValue>({
 });
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const supabase = useMemo(() => createClient(), []);
-  const [session, setSession] = useState<Session | null>(null);
+  const [user, setUser] = useState<SessionUser | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     let active = true;
-    supabase.auth.getSession().then(({ data }) => {
-      if (!active) return;
-      setSession(data.session);
-      setLoading(false);
-    });
-    const { data: sub } = supabase.auth.onAuthStateChange((_event, next) => {
-      setSession(next);
-    });
+    fetch("/api/auth/me", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : { user: null }))
+      .then((j) => {
+        if (!active) return;
+        setUser(j.user ?? null);
+        setLoading(false);
+      })
+      .catch(() => {
+        if (active) setLoading(false);
+      });
     return () => {
       active = false;
-      sub.subscription.unsubscribe();
     };
-  }, [supabase]);
+  }, []);
 
   const value = useMemo<SessionContextValue>(
-    () => ({ session, user: session?.user ?? null, loading }),
-    [session, loading],
+    () => ({ session: user ? { user } : null, user, loading }),
+    [user, loading],
   );
 
   return (

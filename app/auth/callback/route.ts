@@ -1,67 +1,72 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { createClient } from "@/lib/supabase/server";
+import {
+  SESSION_COOKIE,
+  createSessionToken,
+  exchangeCode,
+  type SessionUser,
+} from "@/lib/auth-session";
 
+/**
+ * Direct Google OAuth callback (retired Supabase Auth). Exchanges the auth code for
+ * Google tokens, resolves the profile BY EMAIL so existing data (events keyed by the
+ * old Supabase user_id) stays linked, upserts tokens, and sets the session cookie.
+ */
 export async function GET(request: NextRequest) {
   const url = new URL(request.url);
   const code = url.searchParams.get("code");
   const next = url.searchParams.get("next") || "/calendar";
 
   if (!code) {
-    return NextResponse.redirect(
-      new URL(`/auth/signin?error=missing_code`, url.origin),
-    );
+    return NextResponse.redirect(new URL(`/auth/signin?error=missing_code`, url.origin));
   }
 
-  const supabase = await createClient();
-  const { data, error } = await supabase.auth.exchangeCodeForSession(code);
+  try {
+    const { tokens, user: g } = await exchangeCode(code);
+    const admin = createAdminClient();
 
-  if (error || !data.session) {
-    const message = encodeURIComponent(error?.message ?? "exchange_failed");
-    return NextResponse.redirect(
-      new URL(`/auth/signin?error=${message}`, url.origin),
-    );
-  }
+    // Preserve continuity: if a profile with this email already exists, keep its id.
+    let userId = g.id;
+    if (g.email) {
+      const { data: existing } = await admin
+        .from("profiles")
+        .select("id")
+        .eq("email", g.email)
+        .maybeSingle();
+      if (existing && (existing as { id: string }).id) {
+        userId = (existing as { id: string }).id;
+      }
+    }
 
-  const session = data.session;
-  const user = session.user;
-  const providerToken = session.provider_token ?? null;
-  const providerRefreshToken = session.provider_refresh_token ?? null;
-  const expiresAt = session.expires_at
-    ? new Date(session.expires_at * 1000).toISOString()
-    : null;
-
-  const meta = (user.user_metadata ?? {}) as Record<string, unknown>;
-  const name =
-    (typeof meta.full_name === "string" && meta.full_name) ||
-    (typeof meta.name === "string" && meta.name) ||
-    user.email ||
-    "";
-  const image =
-    (typeof meta.avatar_url === "string" && meta.avatar_url) ||
-    (typeof meta.picture === "string" && meta.picture) ||
-    null;
-
-  const admin = createAdminClient();
-  const { error: upsertError } = await admin
-    .from("profiles")
-    .upsert(
+    const expiresAt = new Date(Date.now() + tokens.expires_in * 1000).toISOString();
+    const { error: upsertError } = await admin.from("profiles").upsert(
       {
-        id: user.id,
-        email: user.email ?? null,
-        name,
-        image,
+        id: userId,
+        email: g.email,
+        name: g.name,
+        image: g.image,
         provider: "google",
-        access_token: providerToken,
-        refresh_token: providerRefreshToken,
+        access_token: tokens.access_token,
+        refresh_token: tokens.refresh_token ?? null,
         expires_at: expiresAt,
       },
       { onConflict: "id" },
     );
+    if (upsertError) console.error("profile upsert failed", upsertError);
 
-  if (upsertError) {
-    console.error("profile upsert failed", upsertError);
+    const sessionUser: SessionUser = { id: userId, email: g.email, name: g.name, image: g.image };
+    const jwt = await createSessionToken(sessionUser);
+    const res = NextResponse.redirect(new URL(next, url.origin));
+    res.cookies.set(SESSION_COOKIE, jwt, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "lax",
+      path: "/",
+      maxAge: 60 * 60 * 24 * 30,
+    });
+    return res;
+  } catch (e) {
+    const message = encodeURIComponent((e as Error).message || "exchange_failed");
+    return NextResponse.redirect(new URL(`/auth/signin?error=${message}`, url.origin));
   }
-
-  return NextResponse.redirect(new URL(next, url.origin));
 }
