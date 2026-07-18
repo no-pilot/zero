@@ -9,6 +9,19 @@ import { SignJWT, jwtVerify } from "jose";
  * Redirect URI = <SITE_URL>/auth/callback  (must be registered in the Google OAuth client).
  */
 export const SESSION_COOKIE = "nozero_session";
+// Short-lived cookies carrying the OAuth CSRF token and the post-login redirect target.
+export const OAUTH_STATE_COOKIE = "nozero_oauth_state";
+export const OAUTH_NEXT_COOKIE = "nozero_oauth_next";
+
+/**
+ * Constrain a post-login redirect target to a same-origin relative path, so a crafted
+ * `next` can't turn the callback into an open redirect. Rejects absolute URLs and
+ * protocol-relative (`//host`) / backslash tricks; falls back to `/calendar`.
+ */
+export function safeNext(next: string | null | undefined, fallback = "/calendar"): string {
+  if (!next || next[0] !== "/" || next[1] === "/" || next[1] === "\\") return fallback;
+  return next;
+}
 const GOOGLE_SCOPES = [
   "openid",
   "email",
