@@ -1,34 +1,13 @@
-import { createServerClient } from "@supabase/ssr";
 import { type NextRequest, NextResponse } from "next/server";
-import type { Database } from "@/types/database";
 
-export async function proxy(request: NextRequest) {
-  let response = NextResponse.next({ request });
-
-  const supabase = createServerClient<Database>(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    {
-      db: { schema: "nozero" },
-      cookies: {
-        getAll() {
-          return request.cookies.getAll();
-        },
-        setAll(cookiesToSet) {
-          cookiesToSet.forEach(({ name, value }) =>
-            request.cookies.set(name, value),
-          );
-          response = NextResponse.next({ request });
-          cookiesToSet.forEach(({ name, value, options }) =>
-            response.cookies.set(name, value, options),
-          );
-        },
-      },
-    },
-  );
-
-  await supabase.auth.getUser();
-  return response;
+/**
+ * Pass-through middleware. Supabase SSR session refresh was retired — nozero now uses
+ * a stateless signed session cookie (see lib/auth-session), so there is nothing to
+ * refresh here. Route protection is enforced in server components/handlers via
+ * lib/supabase/auth-server `requireUser()`.
+ */
+export async function proxy(_request: NextRequest) {
+  return NextResponse.next();
 }
 
 export const config = {

@@ -1,24 +1,16 @@
 import "server-only";
 
-import { createClient } from "@supabase/supabase-js";
+import { createPgClient } from "@/lib/pg-compat";
 import type {
   EventEnvelope,
   IdMapRow,
   MadrigalState,
 } from "@/lib/madrigal/types";
 
-// madrigal lives in its own Postgres schema. The shared admin client is generic-
-// typed to the generated `nozero` schema, so `.schema("madrigal")` on it is a type
-// error — use a dedicated, schema-scoped service-role client instead.
+// madrigal lives in its own Postgres schema (Railway `nozero` db, `madrigal` schema)
+// after retiring Supabase. Schema-scoped plain-PG client.
 function db() {
-  return createClient(
-    process.env.MADRIGAL_SUPABASE_URL ?? process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.MADRIGAL_SUPABASE_SERVICE_ROLE_KEY ?? process.env.SUPABASE_SERVICE_ROLE_KEY!,
-    {
-      auth: { autoRefreshToken: false, persistSession: false },
-      db: { schema: "madrigal" },
-    }
-  );
+  return createPgClient("madrigal");
 }
 
 type IdMapDbRow = {
